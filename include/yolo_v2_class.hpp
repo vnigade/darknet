@@ -68,9 +68,9 @@ extern "C" LIB_API bool built_with_opencv();
 extern "C" LIB_API void send_json_custom(char const* send_buf, int port, int timeout);
 
 class Detector {
-    std::shared_ptr<void> detector_gpu_ptr;
     std::deque<std::vector<bbox_t>> prev_bbox_vec_deque;
     std::string _cfg_filename, _weight_filename;
+    std::shared_ptr<void> detector_gpu_ptr;
 public:
     const int cur_gpu_id;
     float nms = .4;
@@ -81,11 +81,16 @@ public:
 
     LIB_API std::vector<bbox_t> detect(std::string image_filename, float thresh = 0.2, bool use_mean = false);
     LIB_API std::vector<bbox_t> detect(image_t img, float thresh = 0.2, bool use_mean = false);
+    LIB_API std::vector<std::vector<bbox_t>> detect_batch(image_t img, int batch_size, float thresh, bool use_mean);
     static LIB_API image_t load_image(std::string image_filename);
     static LIB_API void free_image(image_t m);
     LIB_API int get_net_width() const;
     LIB_API int get_net_height() const;
     LIB_API int get_net_color_depth() const;
+    LIB_API int get_net_batch() const;
+    LIB_API void set_net_batch(unsigned int batch_size);
+    LIB_API void resize_network(int w, int h, int batch_size);
+
 
     LIB_API std::vector<bbox_t> tracking_id(std::vector<bbox_t> cur_bbox_vec, bool const change_history = true,
                                                 int const frames_story = 5, int const max_dist = 40);
@@ -105,7 +110,46 @@ public:
         return detection_boxes;
     }
 
+    std::vector<std::vector<bbox_t>> detect_resized_batch(image_t img, int init_b, int init_w, int init_h, float thresh = 0.2, bool use_mean = false)
+    {
+        if (img.data == NULL)
+            throw std::runtime_error("Image is empty");
+        auto detection_boxes_batch = detect_batch(img, init_b, thresh, use_mean);
+        float wk = (float)init_w / img.w, hk = (float)init_h / img.h;
+        for (auto &detection_boxes: detection_boxes_batch) {
+            for (auto &i : detection_boxes) i.x *= wk, i.w *= wk, i.y *= hk, i.h *= hk;
+        }
+        return detection_boxes_batch;
+    }
+
 #ifdef OPENCV
+    std::vector<std::vector<bbox_t>> detect_batch(std::vector<cv::Mat> &mats, float thresh = 0.2, bool use_mean = false) 
+    {
+        int b = mats.size();
+        if (b != get_net_batch()) {
+            throw std::runtime_error("Batch size mismatch net size");
+        }
+        
+        // resize cv mat
+        cv::Size network_size = cv::Size(get_net_width(), get_net_height());
+        std::vector<cv::Mat> resized_mats;
+        for (auto &mat : mats) {
+            if (mat.data == NULL)
+                throw std::runtime_error("Batch image is empty");
+            cv::Mat det_mat;
+            if (mat.size() != network_size) {
+                cv::Mat det_mat;
+                cv::resize(mat, det_mat, network_size);
+            } else {
+                det_mat = mat;
+            }
+            resized_mats.push_back(det_mat);
+        }
+
+        auto image_ptr = mat_vec_to_image(resized_mats);
+        return detect_resized_batch(*image_ptr, get_net_batch(), get_net_width(), get_net_height(), thresh, use_mean);
+    }
+
     std::vector<bbox_t> detect(cv::Mat mat, float thresh = 0.2, bool use_mean = false)
     {
         if(mat.data == NULL)
@@ -140,7 +184,47 @@ public:
         return image_ptr;
     }
 
+    static std::shared_ptr<image_t> mat_vec_to_image(std::vector<cv::Mat> &src_vec){
+        std::vector<cv::Mat> cvt_imgs;
+        for (auto &img_src: src_vec) {
+            cv::Mat img;
+            if (img_src.channels() == 4) cv::cvtColor(img_src, img, cv::COLOR_RGBA2BGR);
+            else if (img_src.channels() == 3) cv::cvtColor(img_src, img, cv::COLOR_RGB2BGR);
+            else if (img_src.channels() == 1) cv::cvtColor(img_src, img, cv::COLOR_GRAY2BGR);
+            else std::cerr << " Warning: img_src.channels() is not 1, 3 or 4. It is = " << img_src.channels() << std::endl;
+            std::shared_ptr<image_t> image_ptr;
+            cvt_imgs.push_back(img);
+        }
+        std::shared_ptr<image_t> image_ptr(new image_t, [](image_t *img) { free_image(*img); delete img; });
+        *image_ptr = mat_vec_to_image_custom(cvt_imgs);
+        return image_ptr;
+    }
+
 private:
+    static image_t mat_vec_to_image_custom(std::vector<cv::Mat> &mats) {
+        int batch = mats.size();
+        int w = mats[0].cols;
+        int h = mats[0].rows;
+        int c = mats[0].channels();
+
+        float *X = (float*)calloc(batch*w*h*c, sizeof(float));
+        for (int b = 0; b < batch; ++b) {
+            float *X_ptr = X + b*w*h*c;
+            cv::Mat mat = mats[b];
+            unsigned char *data = (unsigned char *)mat.data;
+            int step = mat.step;
+            for (int y = 0; y < h; ++y) {
+                for (int k = 0; k < c; ++k) {
+                    for (int x = 0; x < w; ++x) {
+                        X_ptr[k*w*h + y*w + x] = data[y*step + x*c + k] / 255.0f;
+                    }
+                }
+            }
+        }
+        image_t im = make_empty_image(w, h, c);
+        im.data = X;
+        return im;
+    }
 
     static image_t mat_to_image_custom(cv::Mat mat)
     {
