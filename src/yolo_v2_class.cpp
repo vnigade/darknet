@@ -225,8 +225,8 @@ LIB_API void  Detector::set_net_batch(unsigned int batch_size) {
 
 LIB_API void Detector::resize_network(int w, int h, int batch_size) {
     detector_gpu_t &detector_gpu = *static_cast<detector_gpu_t *>(detector_gpu_ptr.get());
-    ::resize_network(&detector_gpu.net, w, h);
     set_batch_network(&detector_gpu.net, batch_size);
+    ::resize_network(&detector_gpu.net, w, h);
 }
 
 LIB_API std::vector<bbox_t> Detector::detect(std::string image_filename, float thresh, bool use_mean) {
@@ -367,7 +367,7 @@ LIB_API std::vector<bbox_t> Detector::detect(image_t img, float thresh, bool use
     return bbox_vec;
 }
 
-LIB_API std::vector<std::vector<bbox_t>> Detector::detect_batch(image_t img, int batch_size, float thresh, bool use_mean)
+LIB_API std::vector<std::vector<bbox_t>> Detector::detect(image_t img, int batch_size, float thresh, bool use_mean)
 {
     detector_gpu_t &detector_gpu = *static_cast<detector_gpu_t *>(detector_gpu_ptr.get());
     network &net = detector_gpu.net;
@@ -379,8 +379,6 @@ LIB_API std::vector<std::vector<bbox_t>> Detector::detect_batch(image_t img, int
 
     net.wait_stream = wait_stream;    // 1 - wait CUDA-stream, 0 - not to wait
 #endif
-    //std::cout << "net.gpu_index = " << net.gpu_index << std::endl;
-
     if (batch_size !=  get_net_batch())
         throw std::runtime_error("Batch size not equal to net size");
     layer l = net.layers[net.n - 1];
@@ -399,6 +397,7 @@ LIB_API std::vector<std::vector<bbox_t>> Detector::detect_batch(image_t img, int
     image im = make_image(img.w, img.h, img.c);
     im.data = img.data;
     auto dets_pair = network_predict_batch(&net, im, batch_size, img.w, img.h, thresh, hier_thresh, 0, 1, letterbox);
+    
 
     std::vector<std::vector<bbox_t>> batch_bbox_vec;
     for (int batch = 0; batch < batch_size; ++batch) {

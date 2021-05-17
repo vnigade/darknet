@@ -81,7 +81,7 @@ public:
 
     LIB_API std::vector<bbox_t> detect(std::string image_filename, float thresh = 0.2, bool use_mean = false);
     LIB_API std::vector<bbox_t> detect(image_t img, float thresh = 0.2, bool use_mean = false);
-    LIB_API std::vector<std::vector<bbox_t>> detect_batch(image_t img, int batch_size, float thresh, bool use_mean);
+    LIB_API std::vector<std::vector<bbox_t>> detect(image_t img, int batch_size, float thresh, bool use_mean);
     static LIB_API image_t load_image(std::string image_filename);
     static LIB_API void free_image(image_t m);
     LIB_API int get_net_width() const;
@@ -114,7 +114,7 @@ public:
     {
         if (img.data == NULL)
             throw std::runtime_error("Image is empty");
-        auto detection_boxes_batch = detect_batch(img, init_b, thresh, use_mean);
+        auto detection_boxes_batch = detect(img, init_b, thresh, use_mean);
         float wk = (float)init_w / img.w, hk = (float)init_h / img.h;
         for (auto &detection_boxes: detection_boxes_batch) {
             for (auto &i : detection_boxes) i.x *= wk, i.w *= wk, i.y *= hk, i.h *= hk;
@@ -145,7 +145,6 @@ public:
             }
             resized_mats.push_back(det_mat);
         }
-
         auto image_ptr = mat_vec_to_image(resized_mats);
         return detect_resized_batch(*image_ptr, get_net_batch(), get_net_width(), get_net_height(), thresh, use_mean);
     }
